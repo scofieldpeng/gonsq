@@ -69,6 +69,8 @@ func (t *topicInfo) Connect(channelName string, nsqdAddr []string, nsqlookupdAdd
 		log.Errorf("新建nsq consumer失败，err:%s,topic:%s,channel:%s", err.Error(), t.topic, channelName)
 		return
 	}
+	t.consumer.ChangeMaxInFlight(t.maxInFlight)
+	t.consumer.AddConcurrentHandlers(nsq.Handler(t.handler), t.concurrentNum)
 	// 不断进行重连，直到连接成功
 	for {
 		if len(nsqlookupdAddr) > 0 {
@@ -123,6 +125,7 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 		ok bool
 	)
 	if t, ok = c.topics[topic]; !ok {
+		t = &topicInfo{}
 		t.concurrentNum = c.concurrent
 		t.maxInFlight = c.maxInFlight
 		t.config = nsq.NewConfig()
@@ -219,6 +222,13 @@ func (c *consumer) Init(configSection ini.Section, debug bool) (err error) {
 	}
 	if concurrent, _ := strconv.Atoi(configSection["concurrent"]); concurrent > 0 {
 		Consumer.concurrent = concurrent
+	}
+	if channelName, _ := configSection["channelName"]; channelName != "" {
+		Consumer.channelName = channelName
+	}
+	if Consumer.channelName == "" {
+		err = errors.New("config channelName not found")
+		return
 	}
 
 	if Consumer.maxInFlight < 1 {

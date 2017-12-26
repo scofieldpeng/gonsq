@@ -1,10 +1,15 @@
 package gonsq
 
 import (
+	"errors"
 	"time"
 
+	"strings"
+
+	"strconv"
+
 	"github.com/nsqio/go-nsq"
-	"github.com/pkg/errors"
+	"github.com/vaughan0/go-ini"
 	"go.zhuzi.me/log"
 )
 
@@ -25,9 +30,12 @@ import (
 // channel=chan1
 
 // consumer 消费者结构体
-type Consumer struct {
+type consumer struct {
+	isInit      bool
 	Debug       bool
 	channelName string
+	concurrent  int
+	maxInFlight int
 	//addr 连接地址
 	nsqdAddr       []string
 	nsqLookupdAddr []string
@@ -35,6 +43,7 @@ type Consumer struct {
 	topics map[string]*topicInfo
 }
 
+// topicInfo topic 信息结构体
 type topicInfo struct {
 	topic         string
 	maxInFlight   int
@@ -45,7 +54,7 @@ type topicInfo struct {
 }
 
 // Connect 连接
-func (t *topicInfo) Connect(channelName string, nsqdAddr []string, nsqlookupdAddr []string) {
+func (t *topicInfo) Connect(channelName string, nsqdAddr []string, nsqlookupdAddr []string, debug bool) {
 	if len(nsqdAddr) == 0 && len(nsqlookupdAddr) == 0 {
 		log.Warning("nsqd和nsqlookupd地址皆为空，跳过连接,topic:", t.topic)
 		return
@@ -85,6 +94,11 @@ func (t *topicInfo) Connect(channelName string, nsqdAddr []string, nsqlookupdAdd
 			time.Sleep(time.Duration(sleepSeconds) * time.Second)
 			continue
 		}
+		if debug {
+			t.consumer.SetLogger(log.GetLogger(), nsq.LogLevelDebug)
+		} else {
+			t.consumer.SetLogger(log.GetLogger(), nsq.LogLevelWarning)
+		}
 		log.Infof("连接nsqlookupd(addr:%v)/nsqd(%v)成功", nsqlookupdAddr, nsqdAddr)
 		break
 	}
@@ -94,8 +108,8 @@ func (t *topicInfo) Connect(channelName string, nsqdAddr []string, nsqlookupdAdd
 }
 
 // newConsumer 新建消费者
-func NewConsumer() Consumer {
-	return Consumer{
+func newConsumer() consumer {
+	return consumer{
 		nsqdAddr:       make([]string, 0),
 		nsqLookupdAddr: make([]string, 0),
 		topics:         make(map[string]*topicInfo),
@@ -103,15 +117,24 @@ func NewConsumer() Consumer {
 }
 
 // AddHandler 添加handler
-func (c *Consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
-	if topicInfo, ok := c.topics[topic]; ok {
-		topicInfo.handler = handler
-		c.topics[topic] = topicInfo
+func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
+	var (
+		t  = &topicInfo{}
+		ok bool
+	)
+	if t, ok = c.topics[topic]; !ok {
+		t.concurrentNum = c.concurrent
+		t.maxInFlight = c.maxInFlight
+		t.config = nsq.NewConfig()
 	}
+
+	t.topic = topic
+	t.handler = handler
+	c.topics[topic] = t
 }
 
 // SetAddr 设置consumer地址
-func (c *Consumer) SetNsqlookupdAddr(node, addr string) {
+func (c *consumer) SetNsqlookupdAddr(node, addr string) {
 	exist := false
 	for _, v := range c.nsqLookupdAddr {
 		if v == addr {
@@ -124,15 +147,15 @@ func (c *Consumer) SetNsqlookupdAddr(node, addr string) {
 	}
 }
 
-// SetMultiNsqLookupdAddr 设置多个consumer地址
-func (c *Consumer) SetMultiNsqlookupdAddr(node string, addrArr []string) {
+// SetMultiNsqlookupdAddr 设置多个consumer地址
+func (c *consumer) SetMultiNsqlookupdAddr(node string, addrArr []string) {
 	for _, v := range addrArr {
 		c.SetNsqlookupdAddr(node, v)
 	}
 }
 
 // SetNsqdAddr
-func (c *Consumer) SetNsqdAddr(node, addr string) {
+func (c *consumer) SetNsqdAddr(node, addr string) {
 	exist := false
 	for _, v := range c.nsqdAddr {
 		if v == addr {
@@ -146,40 +169,74 @@ func (c *Consumer) SetNsqdAddr(node, addr string) {
 }
 
 // SetMultiNsqdAddr
-func (c *Consumer) SetMultiNsqdAddr(node string, addrArr []string) {
+func (c *consumer) SetMultiNsqdAddr(node string, addrArr []string) {
 	for _, v := range addrArr {
 		c.SetNsqdAddr(node, v)
 	}
 }
 
 // Stop 停止
-func (c *Consumer) Stop(node string) {
+func (c *consumer) Stop(node string) {
 	if topicInfo, ok := c.topics[node]; ok {
 		topicInfo.consumer.Stop()
 	}
 }
 
 // StopAll 停止全部
-func (c *Consumer) StopAll() {
+func (c *consumer) StopAll() {
 	for k := range c.topics {
 		c.topics[k].consumer.Stop()
 	}
 }
 
 // Run 运行
-func (c *Consumer) Run() (err error) {
+func (c *consumer) Run() (err error) {
+	if !c.isInit {
+		err = errors.New("consumer not init")
+		return
+	}
 	if len(c.nsqdAddr) == 0 && len(c.nsqLookupdAddr) == 0 {
 		err = errors.New("nsqd addr or nsqlookupd address required")
 		return
 	}
 	for _, topicInfo := range c.topics {
-		go topicInfo.Connect(c.channelName, c.nsqdAddr, c.nsqLookupdAddr)
+		go topicInfo.Connect(c.channelName, c.nsqdAddr, c.nsqLookupdAddr, c.Debug)
 	}
 
 	return
 }
 
-// 初始化InitConsumer 初始化消费者
-func InitConsumer() (err error) {
+// Init 初始化
+func (c *consumer) Init(configSection ini.Section, debug bool) (err error) {
+	if nsqdAddr, ok := configSection["nsqd"]; ok {
+		Consumer.nsqdAddr = strings.Split(nsqdAddr, ",")
+	}
+	if nsqlookupdArr, ok := configSection["nsqlookupd"]; ok {
+		Consumer.nsqLookupdAddr = strings.Split(nsqlookupdArr, ",")
+	}
+	if maxInFlight, _ := strconv.Atoi(configSection["maxInFlight"]); maxInFlight > 0 {
+		Consumer.maxInFlight = maxInFlight
+	}
+	if concurrent, _ := strconv.Atoi(configSection["concurrent"]); concurrent > 0 {
+		Consumer.concurrent = concurrent
+	}
+
+	if Consumer.maxInFlight < 1 {
+		Consumer.maxInFlight = 1
+	}
+	if Consumer.concurrent < 1 {
+		Consumer.concurrent = 1
+	}
+
+	if Consumer.maxInFlight < Consumer.concurrent {
+		err = errors.New("max_in_flight should exceed than concurrent")
+		return
+	}
+	Consumer.isInit = true
+
 	return
 }
+
+var (
+	Consumer = newConsumer()
+)

@@ -14,7 +14,7 @@ var (
 	consumerConfig ini.Section
 	debug          = false
 	receiveChan    = make(chan string, 10)
-	recieveNum     = 0
+	receiveNum     = 0
 )
 
 func main() {
@@ -57,9 +57,9 @@ func main() {
 	for {
 		select {
 		case <-receiveChan:
-			recieveNum++
-			log.Info("receive,num:", recieveNum)
-			if recieveNum == 10 {
+			receiveNum++
+			log.Info("receive,num:", receiveNum)
+			if receiveNum == 10 {
 				os.Exit(0)
 			}
 		}

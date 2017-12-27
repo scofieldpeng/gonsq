@@ -26,5 +26,5 @@ func RunAll() (err error) {
 // StopAll 停止nsq 服务
 func StopAll() {
 	Producer.Stop()
-	Consumer.StopAll()
+	Consumer.Stop()
 }

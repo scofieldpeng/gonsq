@@ -77,3 +77,52 @@ func defaultHandler() (handler nsq.HandlerFunc) {
     }
 }
 ```
+
+四. 单独使用producer或者consumer
+
+**单独使用producer**
+
+```go
+// 单独使用producer
+// 初始化
+if err := gonsq.Producer.Init(config,debug);err != nil {
+	panic(err)
+}
+// run起来
+if err := gonsq.Producer.Run();err != nil {
+	panic(err)
+}
+// 别忘了defer
+defer gonsq.Producer.Stop()
+
+// 调用
+// msg支持字符型，数字型，或者直接struct
+if err := gonsq.Producer.Publish(topic,msg);err != nil {
+	log.Error(err)
+}
+// 批量发布
+if err := gonsq.Producer.MultiPublish(topic,msgArr);err != nil {
+	log.Error(err)
+}
+```
+
+**单独使用consumer**
+
+```go
+// 初始化
+gonsq.Consumer.Init(config,debug)
+if err := gonsq.Consumer.Run();err != nil {
+	panic(err)
+}
+// 添加handler
+gonsq.Consumer.AddHandler(topic,handler)
+gonsq.Consumer.AddHandler(topic2,handler2)
+
+// run起来
+if err := gonsq.Consumer.Run();err != nil {
+	panic(err)
+}
+// 别忘了defer
+defer gonsq.Consumer.Stop()
+
+```

@@ -172,7 +172,6 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 				FailMsg:   err.Error(),
 			})
 			err = nil
-			nm.Finish()
 		}
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/pquerna/ffjson/ffjson"
 	"github.com/vaughan0/go-ini"
 	"go.zhuzi.me/log"
+	"time"
 )
 
 // producer 生产者
@@ -111,6 +112,21 @@ func (p *producer) MultiPublish(topic string, msg [][]interface{}) (err error) {
 	}
 	err = p.producer.MultiPublish(topic, m)
 
+	return
+}
+
+func (p *producer) DeferPublish(topic string, msg interface{}, deferSecond int64) (err error) {
+	if !p.isInit {
+		err = errors.New("producer not init")
+		return
+	}
+	var (
+		m []byte
+	)
+	if m, err = p.marshalMsg(msg); err != nil {
+		return
+	}
+	err = p.producer.DeferredPublish(topic, time.Second*time.Duration(deferSecond), m)
 	return
 }
 

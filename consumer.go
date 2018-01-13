@@ -28,6 +28,7 @@ import (
 // max_flight=100
 // concurrent=20
 // channel=chan1
+// max_retry=5
 
 // consumer 消费者结构体
 type consumer struct {
@@ -72,7 +73,7 @@ type FailMessage struct {
 	Body      []byte
 	Attempt   uint16
 	Timestamp int64
-	MessageID int64
+	MessageID string
 	FailMsg   string
 }
 
@@ -152,22 +153,47 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 		t.concurrentNum = c.concurrent
 		t.maxInFlight = c.maxInFlight
 		t.config = nsq.NewConfig()
+		t.config.MaxAttempts = c.maxAttempt
 	}
 
 	t.topic = topic
 	// 自定义 handler
 	t.handler = func(nm *nsq.Message) (err error) {
 		err = handler(nm)
-		if err != nil && t.config.MaxAttempts > 0 && t.config.MaxAttempts == nm.Attempts+1 && t.failHandler != nil {
-			t.failHandler(FailMessage{
-				MessageID: nm.ID,
+		if err != nil && Consumer.topics[topic].config.MaxAttempts > 0 && Consumer.topics[topic].config.MaxAttempts == nm.Attempts && Consumer.topics[topic].failHandler != nil {
+			messageID := make([]byte, 0)
+			for _, v := range nm.ID {
+				messageID = append(messageID, v)
+			}
+			Consumer.topics[topic].failHandler(FailMessage{
+				MessageID: string(messageID),
 				Body:      nm.Body,
 				Timestamp: nm.Timestamp,
 				FailMsg:   err.Error(),
 			})
+			err = nil
+			nm.Finish()
 		}
 		return
 	}
+	c.topics[topic] = t
+}
+
+func (c *consumer) AddFailHandler(topic string, handler FailMessageFunc) {
+	var (
+		t  = &topicInfo{}
+		ok bool
+	)
+	if t, ok = c.topics[topic]; !ok {
+		t = &topicInfo{}
+		t.concurrentNum = c.concurrent
+		t.maxInFlight = c.maxInFlight
+		t.config = nsq.NewConfig()
+		t.config.MaxAttempts = c.maxAttempt
+	}
+
+	t.topic = topic
+	t.failHandler = handler
 	c.topics[topic] = t
 }
 
@@ -259,6 +285,9 @@ func (c *consumer) Init(configSection ini.Section, debug bool) (err error) {
 	if Consumer.channelName == "" {
 		err = errors.New("config channelName not found")
 		return
+	}
+	if maxAttempt, _ := strconv.Atoi(configSection["max_attempt"]); maxAttempt > 0 {
+		Consumer.maxAttempt = uint16(maxAttempt)
 	}
 
 	if Consumer.maxInFlight < 1 {

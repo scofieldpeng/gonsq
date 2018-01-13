@@ -28,6 +28,7 @@ import (
 // max_flight=100
 // concurrent=20
 // channel=chan1
+// max_retry=5
 
 // consumer 消费者结构体
 type consumer struct {
@@ -36,6 +37,7 @@ type consumer struct {
 	channelName string
 	concurrent  int
 	maxInFlight int
+	maxRetry    int
 	//addr 连接地址
 	nsqdAddr       []string
 	nsqLookupdAddr []string
@@ -50,7 +52,9 @@ type topicInfo struct {
 	concurrentNum int
 	config        *nsq.Config
 	handler       nsq.HandlerFunc
-	consumer      *nsq.Consumer
+	// 消息最大消息
+	errorHandler nsq.HandlerFunc
+	consumer     *nsq.Consumer
 }
 
 // Connect 连接
@@ -115,6 +119,7 @@ func newConsumer() consumer {
 		nsqdAddr:       make([]string, 0),
 		nsqLookupdAddr: make([]string, 0),
 		topics:         make(map[string]*topicInfo),
+		maxRetry:       5,
 	}
 }
 
@@ -132,8 +137,26 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 	}
 
 	t.topic = topic
-	t.handler = handler
+	t.handler = consumerHandler(handler)
 	c.topics[topic] = t
+}
+
+func (c *consumer) AddErrorHandler(topic string, handler nsq.HandlerFunc) {
+	var (
+		t  = &topicInfo{}
+		ok bool
+	)
+	if t, ok = c.topics[topic]; !ok {
+		t = &topicInfo{}
+		t.concurrentNum = c.concurrent
+		t.maxInFlight = c.maxInFlight
+		t.config = nsq.NewConfig()
+	}
+
+	t.topic = topic
+	t.errorHandler = handler
+	c.topics[topic] = t
+
 }
 
 // SetAddr 设置consumer地址
@@ -222,6 +245,9 @@ func (c *consumer) Init(configSection ini.Section, debug bool) (err error) {
 	}
 	if concurrent, _ := strconv.Atoi(configSection["concurrent"]); concurrent > 0 {
 		Consumer.concurrent = concurrent
+	}
+	if maxRetry, _ := strconv.Atoi(configSection["max_retry"]); maxRetry > 0 {
+		Consumer.maxRetry = maxRetry
 	}
 	if channelName, _ := configSection["channelName"]; channelName != "" {
 		Consumer.channelName = channelName

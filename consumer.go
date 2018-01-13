@@ -201,15 +201,8 @@ func (c *consumer) SetMultiNsqdAddr(node string, addrArr []string) {
 	}
 }
 
-// Stop 停止
-func (c *consumer) Stop(node string) {
-	if topicInfo, ok := c.topics[node]; ok {
-		topicInfo.consumer.Stop()
-	}
-}
-
-// StopAll 停止全部
-func (c *consumer) StopAll() {
+// StopAll 停止
+func (c *consumer) Stop() {
 	for k := range c.topics {
 		c.topics[k].consumer.Stop()
 	}

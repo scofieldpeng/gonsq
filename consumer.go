@@ -28,7 +28,6 @@ import (
 // max_flight=100
 // concurrent=20
 // channel=chan1
-// max_retry=5
 
 // consumer 消费者结构体
 type consumer struct {
@@ -37,7 +36,7 @@ type consumer struct {
 	channelName string
 	concurrent  int
 	maxInFlight int
-	maxRetry    int
+	maxAttempt  uint16
 	//addr 连接地址
 	nsqdAddr       []string
 	nsqLookupdAddr []string
@@ -52,9 +51,29 @@ type topicInfo struct {
 	concurrentNum int
 	config        *nsq.Config
 	handler       nsq.HandlerFunc
-	// 消息最大消息
-	errorHandler nsq.HandlerFunc
-	consumer     *nsq.Consumer
+	failHandler   FailMessageFunc
+	consumer      *nsq.Consumer
+}
+
+// 失败消息处理函数类型
+type FailMessageFunc func(message FailMessage) (err error)
+
+func (f FailMessageFunc) HandleFailMessage(message FailMessage) (err error) {
+	err = f(message)
+	return
+}
+
+// 失败消息处理接口,继承了该接口的接口都会调用该接口
+type FailMessageHandler interface {
+	HandleFailMessage(message FailMessage) (err error)
+}
+
+type FailMessage struct {
+	Body      []byte
+	Attempt   uint16
+	Timestamp int64
+	MessageID int64
+	FailMsg   string
 }
 
 // Connect 连接
@@ -119,7 +138,6 @@ func newConsumer() consumer {
 		nsqdAddr:       make([]string, 0),
 		nsqLookupdAddr: make([]string, 0),
 		topics:         make(map[string]*topicInfo),
-		maxRetry:       5,
 	}
 }
 
@@ -137,26 +155,20 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 	}
 
 	t.topic = topic
-	t.handler = consumerHandler(handler)
-	c.topics[topic] = t
-}
-
-func (c *consumer) AddErrorHandler(topic string, handler nsq.HandlerFunc) {
-	var (
-		t  = &topicInfo{}
-		ok bool
-	)
-	if t, ok = c.topics[topic]; !ok {
-		t = &topicInfo{}
-		t.concurrentNum = c.concurrent
-		t.maxInFlight = c.maxInFlight
-		t.config = nsq.NewConfig()
+	// 自定义 handler
+	t.handler = func(nm *nsq.Message) (err error) {
+		err = handler(nm)
+		if err != nil && t.config.MaxAttempts > 0 && t.config.MaxAttempts == nm.Attempts+1 && t.failHandler != nil {
+			t.failHandler(FailMessage{
+				MessageID: nm.ID,
+				Body:      nm.Body,
+				Timestamp: nm.Timestamp,
+				FailMsg:   err.Error(),
+			})
+		}
+		return
 	}
-
-	t.topic = topic
-	t.errorHandler = handler
 	c.topics[topic] = t
-
 }
 
 // SetAddr 设置consumer地址
@@ -219,6 +231,8 @@ func (c *consumer) Run() (err error) {
 		return
 	}
 	for _, topicInfo := range c.topics {
+		topicInfo.config.MaxAttempts = c.maxAttempt
+		topicInfo.config.MaxInFlight = c.maxInFlight
 		go topicInfo.Connect(c.channelName, c.nsqdAddr, c.nsqLookupdAddr, c.Debug)
 	}
 
@@ -238,9 +252,6 @@ func (c *consumer) Init(configSection ini.Section, debug bool) (err error) {
 	}
 	if concurrent, _ := strconv.Atoi(configSection["concurrent"]); concurrent > 0 {
 		Consumer.concurrent = concurrent
-	}
-	if maxRetry, _ := strconv.Atoi(configSection["max_retry"]); maxRetry > 0 {
-		Consumer.maxRetry = maxRetry
 	}
 	if channelName, _ := configSection["channelName"]; channelName != "" {
 		Consumer.channelName = channelName

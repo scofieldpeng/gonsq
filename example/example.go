@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"errors"
+
 	"github.com/nsqio/go-nsq"
 	"github.com/scofieldpeng/gonsq"
 	"github.com/vaughan0/go-ini"
@@ -47,7 +48,7 @@ func main() {
 			if i == 5 {
 				break
 			}
-			if err := gonsq.Producer.Publish("test", "hello world"); err != nil {
+			if err := gonsq.Producer.DeferPublish("test", "hello world", 2); err != nil {
 				log.Error("produce error:", err.Error())
 				continue
 			}

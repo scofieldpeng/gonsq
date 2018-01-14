@@ -5,11 +5,12 @@ import (
 
 	"strconv"
 
+	"time"
+
 	"github.com/nsqio/go-nsq"
 	"github.com/pquerna/ffjson/ffjson"
 	"github.com/vaughan0/go-ini"
 	"go.zhuzi.me/log"
-	"time"
 )
 
 // producer 生产者
@@ -115,6 +116,7 @@ func (p *producer) MultiPublish(topic string, msg [][]interface{}) (err error) {
 	return
 }
 
+// 发布延时消息
 func (p *producer) DeferPublish(topic string, msg interface{}, deferSecond int64) (err error) {
 	if !p.isInit {
 		err = errors.New("producer not init")

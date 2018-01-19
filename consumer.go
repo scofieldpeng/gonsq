@@ -50,6 +50,7 @@ type topicInfo struct {
 	topic         string
 	maxInFlight   int
 	concurrentNum int
+	maxAttempt    uint16
 	config        *nsq.Config
 	handler       nsq.HandlerFunc
 	failHandler   FailMessageFunc
@@ -144,6 +145,27 @@ func newConsumer() consumer {
 		nsqLookupdAddr: make([]string, 0),
 		topics:         make(map[string]*topicInfo),
 	}
+}
+
+// 为某个消费者设置最大重试次数,如果为0,不限制,该值必须大于0
+// 同时注意,必须在 consumer.Run()之前设置,不支持运行时设置该值
+func (c *consumer) SetMaxAttempt(topic string, maxAttempts int) {
+	var (
+		t  = &topicInfo{}
+		ok bool
+	)
+	if t, ok = c.topics[topic]; !ok {
+		t = &topicInfo{}
+		t.concurrentNum = c.concurrent
+		t.maxInFlight = c.maxInFlight
+		t.config = nsq.NewConfig()
+		t.config.MaxAttempts = c.maxAttempt
+		t.topic = topic
+	}
+	if maxAttempts >= 0 {
+		t.config.MaxAttempts = uint16(c.maxAttempt)
+	}
+	c.topics[topic] = t
 }
 
 // 消费

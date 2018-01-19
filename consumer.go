@@ -69,12 +69,16 @@ type FailMessageHandler interface {
 	HandleFailMessage(message FailMessage) (err error)
 }
 
+// 失败消息
 type FailMessage struct {
-	Body      []byte
-	Attempt   uint16
-	Timestamp int64
-	MessageID string
-	FailMsg   string
+	nsq.Message
+	FailMsg string
+}
+
+// 消息处理方法
+type MessageHandler interface {
+	HandleMessage(message *nsq.Message) (err error)
+	HandleFailMessage(message *nsq.Message) (err error)
 }
 
 // Connect 连接
@@ -142,7 +146,7 @@ func newConsumer() consumer {
 	}
 }
 
-// AddHandler 添加handler
+// 消费
 func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 	var (
 		t  = &topicInfo{}
@@ -166,10 +170,8 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 				messageID = append(messageID, v)
 			}
 			Consumer.topics[topic].failHandler(FailMessage{
-				MessageID: string(messageID),
-				Body:      nm.Body,
-				Timestamp: nm.Timestamp,
-				FailMsg:   err.Error(),
+				Message: *nm,
+				FailMsg: err.Error(),
 			})
 			err = nil
 		}
@@ -178,6 +180,7 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 	c.topics[topic] = t
 }
 
+// 失败时的处理方法(到达最大次数)
 func (c *consumer) AddFailHandler(topic string, handler FailMessageFunc) {
 	var (
 		t  = &topicInfo{}

@@ -28,6 +28,7 @@ import (
 // max_flight=100
 // concurrent=20
 // channel=chan1
+// max_retry=5
 
 // consumer 消费者结构体
 type consumer struct {
@@ -36,6 +37,7 @@ type consumer struct {
 	channelName string
 	concurrent  int
 	maxInFlight int
+	maxAttempt  uint16
 	//addr 连接地址
 	nsqdAddr       []string
 	nsqLookupdAddr []string
@@ -48,9 +50,36 @@ type topicInfo struct {
 	topic         string
 	maxInFlight   int
 	concurrentNum int
+	maxAttempt    uint16
 	config        *nsq.Config
 	handler       nsq.HandlerFunc
+	failHandler   FailMessageFunc
 	consumer      *nsq.Consumer
+}
+
+// 失败消息处理函数类型
+type FailMessageFunc func(message FailMessage) (err error)
+
+func (f FailMessageFunc) HandleFailMessage(message FailMessage) (err error) {
+	err = f(message)
+	return
+}
+
+// 失败消息处理接口,继承了该接口的接口都会调用该接口
+type FailMessageHandler interface {
+	HandleFailMessage(message FailMessage) (err error)
+}
+
+// 失败消息
+type FailMessage struct {
+	nsq.Message
+	FailMsg string
+}
+
+// 消息处理方法
+type MessageHandler interface {
+	HandleMessage(message *nsq.Message) (err error)
+	HandleFailMessage(message *nsq.Message) (err error)
 }
 
 // Connect 连接
@@ -118,7 +147,28 @@ func newConsumer() consumer {
 	}
 }
 
-// AddHandler 添加handler
+// 为某个消费者设置最大重试次数,如果为0,不限制,该值必须大于0
+// 同时注意,必须在 consumer.Run()之前设置,不支持运行时设置该值
+func (c *consumer) SetMaxAttempt(topic string, maxAttempts int) {
+	var (
+		t  = &topicInfo{}
+		ok bool
+	)
+	if t, ok = c.topics[topic]; !ok {
+		t = &topicInfo{}
+		t.concurrentNum = c.concurrent
+		t.maxInFlight = c.maxInFlight
+		t.config = nsq.NewConfig()
+		t.config.MaxAttempts = c.maxAttempt
+		t.topic = topic
+	}
+	if maxAttempts >= 0 {
+		t.config.MaxAttempts = uint16(c.maxAttempt)
+	}
+	c.topics[topic] = t
+}
+
+// 消费
 func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 	var (
 		t  = &topicInfo{}
@@ -129,10 +179,45 @@ func (c *consumer) AddHandler(topic string, handler nsq.HandlerFunc) {
 		t.concurrentNum = c.concurrent
 		t.maxInFlight = c.maxInFlight
 		t.config = nsq.NewConfig()
+		t.config.MaxAttempts = c.maxAttempt
 	}
 
 	t.topic = topic
-	t.handler = handler
+	// 自定义 handler
+	t.handler = func(nm *nsq.Message) (err error) {
+		err = handler(nm)
+		if err != nil && Consumer.topics[topic].config.MaxAttempts > 0 && Consumer.topics[topic].config.MaxAttempts == nm.Attempts && Consumer.topics[topic].failHandler != nil {
+			messageID := make([]byte, 0)
+			for _, v := range nm.ID {
+				messageID = append(messageID, v)
+			}
+			Consumer.topics[topic].failHandler(FailMessage{
+				Message: *nm,
+				FailMsg: err.Error(),
+			})
+			err = nil
+		}
+		return
+	}
+	c.topics[topic] = t
+}
+
+// 失败时的处理方法(到达最大次数)
+func (c *consumer) AddFailHandler(topic string, handler FailMessageFunc) {
+	var (
+		t  = &topicInfo{}
+		ok bool
+	)
+	if t, ok = c.topics[topic]; !ok {
+		t = &topicInfo{}
+		t.concurrentNum = c.concurrent
+		t.maxInFlight = c.maxInFlight
+		t.config = nsq.NewConfig()
+		t.config.MaxAttempts = c.maxAttempt
+	}
+
+	t.topic = topic
+	t.failHandler = handler
 	c.topics[topic] = t
 }
 
@@ -196,6 +281,8 @@ func (c *consumer) Run() (err error) {
 		return
 	}
 	for _, topicInfo := range c.topics {
+		topicInfo.config.MaxAttempts = c.maxAttempt
+		topicInfo.config.MaxInFlight = c.maxInFlight
 		go topicInfo.Connect(c.channelName, c.nsqdAddr, c.nsqLookupdAddr, c.Debug)
 	}
 
@@ -222,6 +309,9 @@ func (c *consumer) Init(configSection ini.Section, debug bool) (err error) {
 	if Consumer.channelName == "" {
 		err = errors.New("config channelName not found")
 		return
+	}
+	if maxAttempt, _ := strconv.Atoi(configSection["max_attempt"]); maxAttempt > 0 {
+		Consumer.maxAttempt = uint16(maxAttempt)
 	}
 
 	if Consumer.maxInFlight < 1 {

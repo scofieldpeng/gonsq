@@ -1,6 +1,15 @@
 package gonsq
 
-import "github.com/vaughan0/go-ini"
+import (
+	"sync"
+
+	"os"
+
+	"os/signal"
+	"syscall"
+
+	"github.com/vaughan0/go-ini"
+)
 
 // InitAll 初始化producer 和 consumer
 func InitAll(producerConfig, consumerConfig ini.Section, debug bool) (err error) {
@@ -27,4 +36,24 @@ func RunAll() (err error) {
 func StopAll() {
 	Producer.Stop()
 	Consumer.Stop()
+}
+
+// 优雅运行，相当于执行:
+// RunAll()
+// defer StopAll()
+//
+func GracefulRunAll(wg *sync.WaitGroup) (err error) {
+	wg.Add(1)
+	if err = RunAll(); err != nil {
+		return
+	}
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+
+		stopChan := make(chan os.Signal, 1)
+		signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
+		<-stopChan
+		StopAll()
+	}()
 }
